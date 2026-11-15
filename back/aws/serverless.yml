@@ -1,0 +1,201 @@
+service: telecorp-backend
+
+frameworkVersion: '3'
+
+provider:
+  name: aws
+  runtime: python3.11
+  region: ${opt:region, 'us-east-1'}
+  stage: ${opt:stage, 'dev'}
+  # Rol de ejecución universal para AWS Academy Learner Lab:
+  iam:
+    role: arn:aws:iam::${aws:accountId}:role/LabRole
+  environment:
+    STAGE: ${self:provider.stage}
+    INCIDENTS_TABLE: telecorp-incidents-${self:provider.stage}
+    METRICS_TABLE: telecorp-antennas-metrics-${self:provider.stage}
+    COLLECTIVE_TABLE: telecorp-collective-events-${self:provider.stage}
+    INCIDENTS_SNS_TOPIC_ARN: !Ref IncidentEventsTopic
+    NOTIFICATIONS_SNS_TOPIC_ARN: !Ref UserNotificationsTopic
+    JWT_SECRET: ${env:JWT_SECRET, 'TelecorpSecretKey2026Jwt'}
+
+plugins:
+  - serverless-step-functions
+
+functions:
+  # ==========================================
+  # 1. Autorizador JWT en Lambda
+  # ==========================================
+  jwtAuthorizer:
+    handler: src/auth/authorizer.handler
+
+  # ==========================================
+  # 2. Servicios de Incidencias de Usuarios
+  # ==========================================
+  createIncident:
+    handler: src/incidents/create.handler
+    events:
+      - http:
+          path: /incidents
+          method: post
+          cors: true
+          authorizer:
+            name: jwtAuthorizer
+            resultTtlInSeconds: 300
+            identitySource: method.request.header.Authorization
+
+  getIncidentsByUser:
+    handler: src/incidents/get_by_user.handler
+    events:
+      - http:
+          path: /incidents/my-reports
+          method: get
+          cors: true
+          authorizer:
+            name: jwtAuthorizer
+
+  updateIncidentStatus:
+    handler: src/incidents/update_status.handler
+    events:
+      - http:
+          path: /incidents/{id}/status
+          method: patch
+          cors: true
+          authorizer:
+            name: jwtAuthorizer
+
+  # ==========================================
+  # 3. Ingesta y Clasificación de Antenas
+  # ==========================================
+  ingestAntennaMetrics:
+    handler: src/antennas/ingest.handler
+    events:
+      - http:
+          path: /antennas/metrics
+          method: post
+          cors: true
+
+  # ==========================================
+  # 4. Workers de Notificación y Evaluación
+  # ==========================================
+  notificationWorker:
+    handler: src/notifications/worker.handler
+    events:
+      - sns:
+          arn: !Ref UserNotificationsTopic
+          topicName: telecorp-user-notifications-${self:provider.stage}
+
+  evaluateIncidentGroup:
+    handler: src/analytics/evaluate_group.handler
+
+stepFunctions:
+  stateMachines:
+    incidentCorrelationFlow:
+      name: telecorp-incident-correlation-${self:provider.stage}
+      definition:
+        Comment: "Orquestacion de Deteccion Colectiva, Correlacion de Antenas y Notificaciones"
+        StartAt: CheckZoneReports
+        States:
+          CheckZoneReports:
+            Type: Task
+            Resource:
+              Fn::GetAtt: [evaluateIncidentGroup, Arn]
+            Next: IsCollectiveThresholdReached
+
+          IsCollectiveThresholdReached:
+            Type: Choice
+            Choices:
+              - Variable: "$.isCollective"
+                BooleanEquals: true
+                Next: CorrelateWithAntenna
+            Default: EndFlow
+
+          CorrelateWithAntenna:
+            Type: Task
+            Resource:
+              Fn::GetAtt: [evaluateIncidentGroup, Arn]
+            Next: SendCollectiveNotification
+
+          SendCollectiveNotification:
+            Type: Task
+            Resource: "arn:aws:states:::sns:publish"
+            Parameters:
+              TopicArn: !Ref UserNotificationsTopic
+              Message:
+                event: "COLLECTIVE_INCIDENT_DETECTED"
+                zoneId.$: "$.zoneId"
+                affectedUsers.$: "$.affectedUsersCount"
+                priority.$: "$.priority"
+                antennaStatus.$: "$.antennaStatus"
+            End: true
+
+          EndFlow:
+            Type: Pass
+            End: true
+
+resources:
+  Resources:
+    # ------------------------------------------
+    # Tablas DynamoDB (Modo On-Demand / $0 en reposo)
+    # ------------------------------------------
+    IncidentsTable:
+      Type: AWS::DynamoDB::Table
+      Properties:
+        TableName: telecorp-incidents-${self:provider.stage}
+        BillingMode: PAY_PER_REQUEST
+        AttributeDefinitions:
+          - AttributeName: zone_id
+            AttributeType: S
+          - AttributeName: incident_id
+            AttributeType: S
+        KeySchema:
+          - AttributeName: zone_id
+            KeyType: HASH
+          - AttributeName: incident_id
+            KeyType: RANGE
+
+    MetricsTable:
+      Type: AWS::DynamoDB::Table
+      Properties:
+        TableName: telecorp-antennas-metrics-${self:provider.stage}
+        BillingMode: PAY_PER_REQUEST
+        AttributeDefinitions:
+          - AttributeName: antenna_id
+            AttributeType: S
+          - AttributeName: timestamp
+            AttributeType: S
+        KeySchema:
+          - AttributeName: antenna_id
+            KeyType: HASH
+          - AttributeName: timestamp
+            KeyType: RANGE
+
+    CollectiveEventsTable:
+      Type: AWS::DynamoDB::Table
+      Properties:
+        TableName: telecorp-collective-events-${self:provider.stage}
+        BillingMode: PAY_PER_REQUEST
+        AttributeDefinitions:
+          - AttributeName: zone_id
+            AttributeType: S
+          - AttributeName: collective_id
+            AttributeType: S
+        KeySchema:
+          - AttributeName: zone_id
+            KeyType: HASH
+          - AttributeName: collective_id
+            KeyType: RANGE
+
+    # ------------------------------------------
+    # Tópicos SNS
+    # ------------------------------------------
+    IncidentEventsTopic:
+      Type: AWS::SNS::Topic
+      Properties:
+        TopicName: telecorp-incident-events-${self:provider.stage}
+
+    UserNotificationsTopic:
+      Type: AWS::SNS::Topic
+      Properties:
+        TopicName: telecorp-user-notifications-${self:provider.stage}
+
