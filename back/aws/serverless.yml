@@ -7,7 +7,7 @@ provider:
   runtime: python3.11
   region: ${opt:region, 'us-east-1'}
   stage: ${opt:stage, 'dev'}
-  # Rol de ejecución universal para AWS Academy Learner Lab:
+  # Rol de ejecución universal para AWS Academy Learner Lab (sin crear roles IAM):
   iam:
     role: arn:aws:iam::${aws:accountId}:role/LabRole
   environment:
@@ -17,17 +17,26 @@ provider:
     COLLECTIVE_TABLE: telecorp-collective-events-${self:provider.stage}
     INCIDENTS_SNS_TOPIC_ARN: !Ref IncidentEventsTopic
     NOTIFICATIONS_SNS_TOPIC_ARN: !Ref UserNotificationsTopic
-    JWT_SECRET: ${env:JWT_SECRET, 'TelecorpSecretKey2026Jwt'}
+    COLLECTIVE_ALERTS_TOPIC_ARN: !Ref CollectiveAlertsTopic
+    JWT_SECRET: ${env:JWT_SECRET, 'TelecorpSecretKey2026Jwt_SecureKey32BytesLong!'}
 
 plugins:
   - serverless-step-functions
 
 functions:
   # ==========================================
-  # 1. Autorizador JWT en Lambda
+  # 1. Autenticación y Autorización JWT
   # ==========================================
   jwtAuthorizer:
     handler: src/auth/authorizer.handler
+
+  login:
+    handler: src/auth/login.handler
+    events:
+      - http:
+          path: /auth/login
+          method: post
+          cors: true
 
   # ==========================================
   # 2. Servicios de Incidencias de Usuarios
@@ -54,6 +63,26 @@ functions:
           authorizer:
             name: jwtAuthorizer
 
+  getIncidentById:
+    handler: src/incidents/get_incident.handler
+    events:
+      - http:
+          path: /incidents/{id}
+          method: get
+          cors: true
+          authorizer:
+            name: jwtAuthorizer
+
+  listIncidents:
+    handler: src/incidents/list_incidents.handler
+    events:
+      - http:
+          path: /incidents
+          method: get
+          cors: true
+          authorizer:
+            name: jwtAuthorizer
+
   updateIncidentStatus:
     handler: src/incidents/update_status.handler
     events:
@@ -75,8 +104,39 @@ functions:
           method: post
           cors: true
 
+  listAntennas:
+    handler: src/antennas/list_antennas.handler
+    events:
+      - http:
+          path: /antennas
+          method: get
+          cors: true
+      - http:
+          path: /antennas/{id}/metrics
+          method: get
+          cors: true
+
   # ==========================================
-  # 4. Workers de Notificación y Evaluación
+  # 4. Analítica, Incidentes Colectivos y Reportes
+  # ==========================================
+  getAnalyticsSummary:
+    handler: src/analytics/summary.handler
+    events:
+      - http:
+          path: /analytics/summary
+          method: get
+          cors: true
+
+  getCollectiveEvents:
+    handler: src/analytics/collective.handler
+    events:
+      - http:
+          path: /collective-events
+          method: get
+          cors: true
+
+  # ==========================================
+  # 5. Workers de Notificación y Evaluación
   # ==========================================
   notificationWorker:
     handler: src/notifications/worker.handler
@@ -148,11 +208,24 @@ resources:
             AttributeType: S
           - AttributeName: incident_id
             AttributeType: S
+          - AttributeName: user_id
+            AttributeType: S
+          - AttributeName: created_at
+            AttributeType: S
         KeySchema:
           - AttributeName: zone_id
             KeyType: HASH
           - AttributeName: incident_id
             KeyType: RANGE
+        GlobalSecondaryIndexes:
+          - IndexName: UserIndex
+            KeySchema:
+              - AttributeName: user_id
+                KeyType: HASH
+              - AttributeName: created_at
+                KeyType: RANGE
+            Projection:
+              ProjectionType: ALL
 
     MetricsTable:
       Type: AWS::DynamoDB::Table
@@ -164,11 +237,22 @@ resources:
             AttributeType: S
           - AttributeName: timestamp
             AttributeType: S
+          - AttributeName: zone_id
+            AttributeType: S
         KeySchema:
           - AttributeName: antenna_id
             KeyType: HASH
           - AttributeName: timestamp
             KeyType: RANGE
+        GlobalSecondaryIndexes:
+          - IndexName: ZoneTimestampIndex
+            KeySchema:
+              - AttributeName: zone_id
+                KeyType: HASH
+              - AttributeName: timestamp
+                KeyType: RANGE
+            Projection:
+              ProjectionType: ALL
 
     CollectiveEventsTable:
       Type: AWS::DynamoDB::Table
@@ -187,7 +271,7 @@ resources:
             KeyType: RANGE
 
     # ------------------------------------------
-    # Tópicos SNS
+    # Tópicos SNS para Mensajería Pub/Sub
     # ------------------------------------------
     IncidentEventsTopic:
       Type: AWS::SNS::Topic
@@ -199,3 +283,7 @@ resources:
       Properties:
         TopicName: telecorp-user-notifications-${self:provider.stage}
 
+    CollectiveAlertsTopic:
+      Type: AWS::SNS::Topic
+      Properties:
+        TopicName: telecorp-collective-alerts-${self:provider.stage}
