@@ -22,6 +22,7 @@ provider:
 
 plugins:
   - serverless-step-functions
+  - serverless-python-requirements
 
 functions:
   # ==========================================
