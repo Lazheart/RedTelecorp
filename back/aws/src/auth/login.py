@@ -6,6 +6,7 @@ y obtener un token JWT con sus respectivos roles y permisos RBAC.
 """
 
 import json
+import hashlib
 from typing import Dict, Any
 try:
     from src.common.response import success, bad_request, unauthorized, server_error
@@ -61,7 +62,7 @@ def handler(event: Dict[str, Any], context: Any = None) -> Dict[str, Any]:
         if username in PRECONFIGURED_USERS:
             user_data = PRECONFIGURED_USERS[username]
             # En entorno de hackathon/demo permitimos la contraseña predefinida o cualquier password si es demo
-            if password and password != user_data["password"]:
+            if password != user_data["password"]:
                 return unauthorized("Credenciales incorrectas")
 
             user_id = user_data["userId"]
@@ -69,14 +70,11 @@ def handler(event: Dict[str, Any], context: Any = None) -> Dict[str, Any]:
             email = username
         else:
             # 2. Generación dinámica para usuarios de prueba
-            user_id = body.get("userId") or f"usr-{abs(hash(username)) % 10000:04d}"
+            user_id = body.get("userId") or f"usr-{int(hashlib.md5(username.encode()).hexdigest(), 16) % 10000:04d}"
             email = username
 
             # Asignar rol solicitado si es válido, o default USUARIO
-            if requested_role and requested_role.upper() in [r.value for r in UserRole]:
-                role = requested_role.upper()
-            else:
-                role = UserRole.USUARIO.value
+            role = UserRole.USUARIO.value  # sin elevar rol
 
         token = generate_token(
             user_id=user_id,

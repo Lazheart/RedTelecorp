@@ -7,6 +7,7 @@ Cumple con RF-19, RF-21, RF-23, RF-24, RN-06, RN-07 y Sección 8.7 de SPECIFICAT
 import json
 from datetime import datetime, timezone
 from typing import Dict, Any
+from urllib.parse import unquote
 
 try:
     from src.common.response import success, bad_request, not_found, forbidden, server_error
@@ -24,7 +25,7 @@ def handler(event: Dict[str, Any], context: Any = None) -> Dict[str, Any]:
     """Maneja cambios de estado y registro histórico de incidencias."""
     try:
         path_params = event.get("pathParameters") or {}
-        incident_id = path_params.get("id")
+        incident_id = unquote(path_params.get("id") or "")
         if not incident_id:
             return bad_request("El parámetro 'id' es obligatorio")
 

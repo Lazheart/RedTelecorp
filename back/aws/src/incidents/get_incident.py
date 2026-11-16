@@ -5,6 +5,7 @@ Cumple con RF-18, RF-22, RF-24 y RF-31 de SPECIFICATION.md.
 """
 
 from typing import Dict, Any
+from urllib.parse import unquote
 try:
     from src.common.response import success, not_found, forbidden, bad_request, server_error
     from src.common.db import db
@@ -19,7 +20,7 @@ def handler(event: Dict[str, Any], context: Any = None) -> Dict[str, Any]:
     """Retorna una incidencia por su ID incluyendo historial completo y contexto colectivo."""
     try:
         path_params = event.get("pathParameters") or {}
-        incident_id = path_params.get("id")
+        incident_id = unquote(path_params.get("id") or "")
 
         if not incident_id:
             return bad_request("El parámetro 'id' es requerido en la ruta")

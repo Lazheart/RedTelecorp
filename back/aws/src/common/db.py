@@ -9,6 +9,17 @@ import copy
 from typing import Dict, Any, List, Optional
 from decimal import Decimal
 
+def _to_dynamo(obj):
+    """DynamoDB no acepta float: convierte recursivamente a Decimal."""
+    if isinstance(obj, float):
+        return Decimal(str(obj))
+    if isinstance(obj, dict):
+        return {k: _to_dynamo(v) for k, v in obj.items()}
+    if isinstance(obj, list):
+        return [_to_dynamo(v) for v in obj]
+    return obj
+
+
 # Tablas configuradas desde variables de entorno
 STAGE = os.environ.get("STAGE", "dev")
 INCIDENTS_TABLE_NAME = os.environ.get("INCIDENTS_TABLE", f"telecorp-incidents-{STAGE}")
@@ -70,7 +81,7 @@ class DynamoClient:
         """Guarda o reemplaza una incidencia."""
         table = self._get_table(INCIDENTS_TABLE_NAME)
         if table:
-            table.put_item(Item=item)
+            table.put_item(Item=_to_dynamo(item))
         else:
             # Mock store
             existing = [
@@ -218,7 +229,7 @@ class DynamoClient:
                 attr_val = f":val{idx}"
                 update_expr_parts.append(f"{attr_name} = {attr_val}")
                 expr_names[attr_name] = k
-                expr_values[attr_val] = v
+                expr_values[attr_val] = _to_dynamo(v)
 
             expr_str = "SET " + ", ".join(update_expr_parts)
             res = table.update_item(
@@ -243,7 +254,7 @@ class DynamoClient:
         """Registra una métrica de antena."""
         table = self._get_table(METRICS_TABLE_NAME)
         if table:
-            table.put_item(Item=item)
+            table.put_item(Item=_to_dynamo(item))
         else:
             _MOCK_STORAGE[METRICS_TABLE_NAME].append(copy.deepcopy(item))
         return item
@@ -322,7 +333,7 @@ class DynamoClient:
         """Guarda o actualiza un evento de incidente colectivo."""
         table = self._get_table(COLLECTIVE_TABLE_NAME)
         if table:
-            table.put_item(Item=item)
+            table.put_item(Item=_to_dynamo(item))
         else:
             existing = [
                 c for c in _MOCK_STORAGE[COLLECTIVE_TABLE_NAME]
