@@ -152,6 +152,7 @@ stepFunctions:
   stateMachines:
     incidentCorrelationFlow:
       name: telecorp-incident-correlation-${self:provider.stage}
+      role: arn:aws:iam::${aws:accountId}:role/LabRole
       definition:
         Comment: "Orquestacion de Deteccion Colectiva, Correlacion de Antenas y Notificaciones"
         StartAt: CheckZoneReports
