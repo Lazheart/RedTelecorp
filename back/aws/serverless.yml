@@ -24,6 +24,11 @@ plugins:
   - serverless-step-functions
   - serverless-python-requirements
 
+custom:
+  pythonRequirements:
+    dockerizePip: false
+    pythonBin: python3
+
 functions:
   # ==========================================
   # 1. Autenticación y Autorización JWT
